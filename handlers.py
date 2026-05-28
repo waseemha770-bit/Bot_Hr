@@ -1,0 +1,252 @@
+import os
+import random
+import logging
+import pandas as pd
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.ext import ContextTypes
+from models import SessionLocal, Employee, Attendance, VacationRequest, HR_Policy, HR_Ticket, encrypt_data, decrypt_data
+from utils import calculate_distance, clean_and_format_yemeni_phone, generate_payslip_pdf
+
+logger = logging.getLogger(__name__)
+
+OWNER_PHONE = "+967771954200"
+OWNER_CHAT_ID = 892385625
+COMPANY_LAT = 15.3562
+COMPANY_LON = 44.2075
+MAX_DISTANCE_METERS = 500.0
+
+sessions = {}
+
+async def show_admin_menu(bot, chat_id):
+    keyboard = [
+        [InlineKeyboardButton("📊 تصدير البيانات الحاليّة إلى excel", callback_data="admin_export_import")],
+        [InlineKeyboardButton("🗂️ تنظيم وإدارة المذكرات والشكاوى", callback_data="admin_manage_tickets")],
+        [InlineKeyboardButton("📥 مراجعة طلبات الإجازات المعلقة", callback_data="admin_manage_vacations")]
+    ]
+    await bot.send_message(
+        chat_id=chat_id,
+        text="⚙️ **لوحة التحكم الإدارية للموارد البشرية:**\n*(قم برفع ملف الـ Excel المحدث مباشرة هنا في الشات لتحديث الموظفين)*",
+        parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_employee_menu(bot, chat_id, employee_name):
+    inline_keyboard = [
+        [InlineKeyboardButton("💵 كشف الراتب الرقمي (PDF)", callback_data="emp_salary"), InlineKeyboardButton("📅 رصيد الإجازات الحالي", callback_data="emp_vacation")],
+        [InlineKeyboardButton("✈️ تقديم طلب إجازة تفاعلي", callback_data="emp_request_vacation")],
+        [InlineKeyboardButton("🎫 إرسال مذكرة / شكوى للمدير", callback_data="emp_ticket")],
+        [InlineKeyboardButton("🚪 تسجيل الخروج الآمن", callback_data="emp_logout")]
+    ]
+    reply_keyboard = [[KeyboardButton(text="📍 تسجيل الحضور/الانصراف الجغرافي", request_location=True)]]
+    await bot.send_message(chat_id=chat_id, text=f"🛡️ مرحباً بك يا سيد: **{employee_name}**", parse_mode='Markdown', reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    await bot.send_message(chat_id=chat_id, text="📋 لوحة الخدمات الذاتية للموظف:", reply_markup=InlineKeyboardMarkup(inline_keyboard))
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    sessions[chat_id] = {"step": "ASK_PHONE"}
+    db = SessionLocal()
+    current_user = db.query(Employee).filter(Employee.telegram_id == str(chat_id)).first()
+    
+    if chat_id == OWNER_CHAT_ID or (current_user and current_user.role in ["Owner", "Admin"]):
+        await show_admin_menu(context.bot, chat_id)
+    
+    await update.message.reply_text("🔒 بوابة الخدمات الذاتية الذكية.\n\nيرجى إدخال **رقم هاتفك** للتحقق الآمن (مثال: `771954200`):", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    db.close()
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip() if update.message.text else ""
+    db = SessionLocal()
+    
+    if chat_id not in sessions: sessions[chat_id] = {"step": "ASK_PHONE"}
+    step = sessions[chat_id].get("step")
+
+    if step == "ASK_PHONE":
+        formatted_phone = clean_and_format_yemeni_phone(text)
+        employee = db.query(Employee).filter(Employee.phone_number == formatted_phone).first()
+        
+        if employee:
+            otp_code = str(random.randint(100000, 999999))
+            sessions[chat_id] = {"step": "ASK_OTP", "id": employee.id, "otp": otp_code}
+            employee.telegram_id = str(chat_id)
+            db.commit()
+            await context.bot.send_message(chat_id=chat_id, text=f"🔐 **رمز التحقق المؤقت (OTP) هو:** `{otp_code}`", parse_mode='Markdown')
+            await update.message.reply_text("📲 يرجى إدخال رمز التحقق هنا:")
+        else:
+            # 🤖 الذكاء الاصطناعي للرد على السياسات واللوائح تلقائياً (AI FAQ)
+            policy = db.query(HR_Policy).filter(HR_Policy.keyword.like(f"%{text}%")).first()
+            if policy:
+                await update.message.reply_text(policy.response_text)
+            else:
+                await update.message.reply_text("❌ عذراً، رقم الهاتف غير مسجل بالنظام أو لم أفهم استفسارك حول اللوائح.")
+
+    elif step == "ASK_OTP":
+        if text == sessions[chat_id]["otp"]:
+            sessions[chat_id]["step"] = "AI_CHAT_MODE"
+            employee = db.query(Employee).filter(Employee.id == sessions[chat_id]["id"]).first()
+            await show_employee_menu(context.bot, chat_id, employee.name)
+        else:
+            await update.message.reply_text("❌ الرمز غير صحيح، حاول مجدداً.")
+
+    elif step == "RAISE_TICKET":
+        ticket = HR_Ticket(employee_id=sessions[chat_id]["id"], details=text)
+        db.add(ticket)
+        db.commit()
+        sessions[chat_id]["step"] = "AI_CHAT_MODE"
+        await update.message.reply_text("✅ تم رفع مذكرتك بنجاح وجاري مراجعتها من قبل الإدارة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ القائمة الرئيسية", callback_data="back_to_emp_menu")]]))
+
+    elif step == "INPUT_VACATION_DAYS":
+        try:
+            days = int(text)
+            req = VacationRequest(employee_id=sessions[chat_id]["id"], vacation_type="إجازة اعتيادية", days_count=days)
+            db.add(req)
+            db.commit()
+            await context.bot.send_message(chat_id=OWNER_CHAT_ID, text=f"⚠️ **طلب إجازة جديد معلق:**\nالموظف برقم: {sessions[chat_id]['id']} طلب {days} أيام إجازة.")
+            await update.message.reply_text("✅ تم إرسال طلبك للإدارة، وسيتم إشعارك فور اتخاذ القرار.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ القائمة الرئيسية", callback_data="back_to_emp_menu")]]))
+        except ValueError:
+            await update.message.reply_text("❌ يرجى إدخال عدد أيام صحيح (أرقام فقط):")
+        sessions[chat_id]["step"] = "AI_CHAT_MODE"
+
+    db.close()
+
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    db = SessionLocal()
+    if chat_id not in sessions or "id" not in sessions[chat_id]:
+        await update.message.reply_text("🔒 يرجى تسجيل الدخول أولاً.")
+        db.close()
+        return
+        
+    user_lat = update.message.location.latitude
+    user_lon = update.message.location.longitude
+    distance = calculate_distance(user_lat, user_lon, COMPANY_LAT, COMPANY_LON)
+    
+    if distance <= MAX_DISTANCE_METERS:
+        status = "مقبول ✅"
+        msg = f"✅ **تم تسجيل حضورك بنجاح!**\n📏 البعد عن النطاق الجغرافي للمؤسسة: **{distance:.1f} متر**."
+    else:
+        status = "مرفوض ❌"
+        msg = f"❌ **فشل الحضور الجغرافي!**\n📏 أنت على بعد **{distance/1000:.2f} كم** (النطاق المسموح به 500 متر فقط)."
+        
+    db.add(Attendance(employee_id=sessions[chat_id]["id"], distance_from_company=distance, status=status))
+    db.commit()
+    db.close()
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    db = SessionLocal()
+    current_user = db.query(Employee).filter(Employee.telegram_id == str(chat_id)).first()
+    
+    if chat_id != OWNER_CHAT_ID and (not current_user or current_user.role not in ["Owner", "Admin"]):
+        await update.message.reply_text("❌ صلاحيات غير كافية لرفع ملفات الهيكل التنظيمي.")
+        db.close()
+        return
+
+    doc = update.message.document
+    if not doc.file_name.lower().endswith(('.xlsx', '.xls')):
+        await update.message.reply_text("❌ يرجى رفع ملف Excel صالح.")
+        db.close()
+        return
+
+    await update.message.reply_text("⏳ جاري قراءة وتنظيف ملف البيانات مع الفلترة الذكية...")
+    try:
+        new_file = await context.bot.get_file(doc.file_id)
+        file_path = "imported_hr_data.xlsx"
+        await new_file.download_to_drive(file_path)
+        
+        df = pd.read_excel(file_path, dtype=str)
+        df.columns = [str(col).strip() for col in df.columns]
+        
+        for index, row in df.iterrows():
+            if pd.isna(row["الرقم الوظيفي"]): continue
+            emp_id = str(row["الرقم الوظيفي"]).split('.')[0].strip()
+            emp_name = str(row["الاسم"]).strip()
+            emp_phone = clean_and_format_yemeni_phone(row["رقم الهاتف الدولي"])
+            emp_role = str(row["الصلاحية"]).strip() if pd.notna(row["الصلاحية"]) else "Employee"
+            
+            existing = db.query(Employee).filter(Employee.id == emp_id).first()
+            if existing:
+                existing.name = emp_name
+                existing.phone_number = emp_phone
+                existing.role = emp_role
+            else:
+                db.add(Employee(id=emp_id, name=emp_name, phone_number=emp_phone, role=emp_role, encrypted_salary=encrypt_data("1200.0")))
+        db.commit()
+        await update.message.reply_text("✅ تم تحديث وهيكلة قاعدة بيانات الموظفين بنجاح تام!")
+        os.remove(file_path)
+    except Exception as e:
+        logger.error(e)
+        await update.message.reply_text("❌ خطأ بنيوي في معالجة خلايا الإكسل.")
+    finally:
+        db.close()
+
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chat_id = query.message.chat_id
+    await query.answer()
+    db = SessionLocal()
+    
+    if query.data == "back_to_admin_menu":
+        await query.message.delete()
+        await show_admin_menu(context.bot, chat_id)
+    elif query.data == "back_to_emp_menu":
+        await query.message.delete()
+        if chat_id in sessions and "id" in sessions[chat_id]:
+            emp = db.query(Employee).filter(Employee.id == sessions[chat_id]["id"]).first()
+            if emp: await show_employee_menu(context.bot, chat_id, emp.name)
+
+    elif query.data == "emp_salary":
+        emp = db.query(Employee).filter(Employee.id == sessions[chat_id]["id"]).first()
+        sal = decrypt_data(emp.encrypted_salary)
+        pdf = generate_payslip_pdf(emp.name, emp.id, emp.title, sal)
+        with open(pdf, "rb") as f:
+            await context.bot.send_document(chat_id=chat_id, document=f, filename=f"Payslip_{emp.id}.pdf")
+        os.remove(pdf)
+        
+    elif query.data == "emp_vacation":
+        emp = db.query(Employee).filter(Employee.id == sessions[chat_id]["id"]).first()
+        await query.message.reply_text(f"📅 رصيد إجازاتك الحالي المتبقي: **{emp.vacation_balance} يوماً**.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ رجوع", callback_data="back_to_emp_menu")]]))
+    elif query.data == "emp_request_vacation":
+        sessions[chat_id]["step"] = "INPUT_VACATION_DAYS"
+        await query.message.reply_text("✈️ يرجى كتابة عدد الأيام المراد طلبها للإجازة:")
+    elif query.data == "emp_ticket":
+        sessions[chat_id]["step"] = "RAISE_TICKET"
+        await query.message.reply_text("📝 تفضل بكتابة نص الشكوى أو المقترح بوضوح:")
+    elif query.data == "emp_logout":
+        sessions[chat_id] = {"step": "ASK_PHONE"}
+        await query.message.reply_text("🔒 تم تسجيل الخروج الآمن ونظفت الجلسة التفاعلية.", reply_markup=ReplyKeyboardRemove())
+
+    elif query.data == "admin_export_import":
+        emps = db.query(Employee).all()
+        df = pd.DataFrame([{"الرقم الوظيفي": e.id, "الاسم": e.name, "رقم الهاتف الدولي": e.phone_number, "الصلاحية": e.role} for e in emps])
+        df.to_excel("hr_report.xlsx", index=False)
+        with open("hr_report.xlsx", "rb") as f:
+            await context.bot.send_document(chat_id=chat_id, document=f, filename="بيانات_الموظفين.xlsx")
+        os.remove("hr_report.xlsx")
+        
+    elif query.data == "admin_manage_vacations":
+        reqs = db.query(VacationRequest).filter(VacationRequest.status == "قيد الانتظار ⏳").all()
+        if not reqs:
+            await query.message.reply_text("✅ لا توجد طلبات إجازة معلقة حالياً.")
+        for r in reqs:
+            kb = [[InlineKeyboardButton("موافقة ✅", callback_data=f"vac_approve_{r.id}"), InlineKeyboardButton("رفض ❌", callback_data=f"vac_reject_{r.id}")]]
+            await query.message.reply_text(f"✈️ طلب إجازة للموظف {r.employee_id} لمدة {r.days_count} أيام.", reply_markup=InlineKeyboardMarkup(kb))
+            
+    elif query.data.startswith("vac_"):
+        parts = query.data.split("_")
+        action, req_id = parts[1], int(parts[2])
+        req = db.query(VacationRequest).filter(VacationRequest.id == req_id).first()
+        if req:
+            if action == "approve":
+                req.status = "مقبولة ✅"
+                emp = db.query(Employee).filter(Employee.id == req.employee_id).first()
+                if emp: emp.vacation_balance -= req.days_count
+                await query.message.reply_text("✅ تم الموافقة على الإجازة وتحديث الرصيد.")
+            else:
+                req.status = "مرفوضة ❌"
+                await query.message.reply_text("❌ تم رفض طلب الإجازة.")
+            db.commit()
+            
+    db.close()
+
