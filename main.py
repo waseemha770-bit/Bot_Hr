@@ -15,7 +15,16 @@ except Exception as e:
     print(f"تنبيه تحديث المكتبات: {e}")
 
 # =====================================================================
-# 2. خادم الويب الوهمي لحل مشكلة الـ Port Binding والـ HEAD Requests
+# 2. الإعدادات الأساسية للهوية (قائمة المدراء)
+# =====================================================================
+# 👑 تم دمج معرف التلجرام الخاص بك لتفعيل لوحة المدير تلقائياً لحسابك
+ADMIN_IDS = [892385625] 
+
+# تعريف مراحل محادثة الشكاوى (Conversation States)
+AWAITING_COMPLAINT_TEXT, AWAITING_COMPLAINT_FILE = range(2)
+
+# =====================================================================
+# 3. خادم الويب الوهمي لحل مشكلة الـ Port Binding والـ HEAD Requests
 # =====================================================================
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -30,14 +39,13 @@ class DummyWebhookServer(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is Running Successfully!")
 
 def run_dummy_server():
-    # جلب المنفذ ديناميكياً من Render وإلا استخدام 8080 كافتراضي
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), DummyWebhookServer)
     print(f"📡 Dummy Server started on port {port} to bypass Render checks...")
     server.serve_forever()
 
 # =====================================================================
-# 3. استدعاء مكتبات البوت والبيانات
+# 4. استدعاء مكتبات البوت والبيانات
 # =====================================================================
 import datetime
 import pandas as pd
@@ -52,166 +60,166 @@ from telegram.ext import (
     filters
 )
 
-# تعريف مراحل محادثة الشكاوى (Conversation States)
-AWAITING_COMPLAINT_TEXT, AWAITING_COMPLAINT_FILE = range(2)
-
 # =====================================================================
-# 4. دالة بدء التشغيل وعرض القائمة الرئيسية (Main Menu)
+# 5. دالة بدء التشغيل وعرض القائمة بحسب الصلاحية (مواظف / مدير)
 # =====================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ['🗓️ جدول الدوام', '⏱️ سجل البصمات'],
-        ['✍️ تقديم شكوى', '👤 ملفي الشخصي']
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text(
-        "👋 أهلاً بك في لوحة تحكم الموظف الذكية.\n"
-        "الرجاء اختيار الخدمة المطلوبة من القائمة أدناه:",
-        reply_markup=reply_markup
-    )
+    user_id = update.effective_user.id
+    
+    # إذا كان المستخدم مديراً (حسابك الشخصي)
+    if user_id in ADMIN_IDS:
+        keyboard = [
+            ['📊 إحصائيات الموظفين', '📂 مراجعة الشكاوى'],
+            ['⚙️ إعدادات النظام', '👤 التحويل لواجهة موظف']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "👑 **مرحباً بك يا وسيم في لوحة تحكم المدير الإدارية**\n"
+            "يمكنك إدارة طلبات الموظفين والاطلاع على التقارير الحية من هنا:",
+            reply_markup=reply_markup, parse_mode="Markdown"
+        )
+    # إذا كان المستخدم موظفاً عادياً
+    else:
+        keyboard = [
+            ['🗓️ جدول الدوام', '⏱️ سجل البصمات'],
+            ['✍️ تقديم شكوى', '👤 ملفي الشخصي']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "👋 أهلاً بك في لوحة تحكم الموظف الذكية.\n"
+            "الرجاء اختيار الخدمة المطلوبة من القائمة أدناه:",
+            reply_markup=reply_markup
+        )
 
 # =====================================================================
-# 5. قسم جدول الدوام (Shift Schedule)
+# 6. معالجة أزرار القائمة الرئيسية للمدير
+# =====================================================================
+async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == '📊 إحصائيات الموظفين':
+        await update.message.reply_text("📈 **إحصائيات اليوم الحالية:**\n• الموظفين الحاضرين: 18\n• المتأخرين: 2\n• الغائبين: 1", parse_mode="Markdown")
+    elif text == '📂 مراجعة الشكاوى':
+        await update.message.reply_text("📥 لا توجد شكاوى جديدة غير مقروءة في قاعدة البيانات حالياً.")
+    elif text == '⚙️ إعدادات النظام':
+        await update.message.reply_text("⚙️ إعدادات النظام مفعّلة وتعمل بشكل مستقر على سيرفرات Render الآمنة.")
+    elif text == '👤 التحويل لواجهة موظف':
+        keyboard = [['🗓️ جدول الدوام', '⏱️ سجل البصمات'], ['✍️ تقديم شكوى', '👤 ملفي الشخصي']]
+        await update.message.reply_text("🔄 تم الانتقال لواجهة العرض التجريبية الخاصة بالموظفين:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+
+# =====================================================================
+# 7. معالجة قسم جدول الدوام (الموظف)
 # =====================================================================
 async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "👤 **الموظف:** وسيم حمدان\n"
         "🆔 **الرقم الوظيفي:** HR-2245\n"
-        "📅 **الفترة الحالية:** الأسبوع الحالي\n\n"
-        "📋 **جدول دوامك المعتمد:**\n"
-        "• الأحد - الثلاثاء: 08:00 ص - 04:00 م (صباحي)\n"
-        "• الأربعاء: 04:00 م - 12:00 م (مسائي)\n"
-        "• الخميس: 08:00 ص - 04:00 م (صباحي)\n"
-        "• الجمعة - السبت: إجازة أسبوعية."
+        "📋 **جدول دوامك الحالي الأسبوعي:**\n"
+        "• الأحد - الخميس: 08:00 ص - 04:00 م"
     )
     keyboard = [
         [InlineKeyboardButton("📅 الأسبوع القادم", callback_data="sched_next_week")],
         [InlineKeyboardButton("🔍 تصفية بحسب الشهر", callback_data="sched_filter_month")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # =====================================================================
-# 6. قسم سجل البصمات (Attendance Logs)
+# 8. معالجة قسم سجل البصمات (الموظف)
 # =====================================================================
 async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("مايو 2026", callback_data="att_may_2026")],
         [InlineKeyboardButton("أبريل 2026", callback_data="att_apr_2026")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("⏱️ يرجى اختيار الشهر المراد عرض سجل البصمات له:", reply_markup=reply_markup)
-
-async def process_attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    table_text = (
-        "⏱️ **سجل بصمات شهر: مايو 2026**\n\n"
-        "`التاريخ   | الحضور   | الانصراف | الحالة`\n"
-        "`---------------------------------------`\n"
-        "`24-05-26 | 07:55 ص  | 04:05 م  | ✅ منتظم`\n"
-        "`25-05-26 | 08:15 ص  | 04:00 م  | ⚠️ تأخير`\n"
-        "`26-05-26 | 03:50 م  | 12:02 م  | ✅ منتظم`\n"
-        "`27-05-26 | --:--    | --:--    | ❌ غياب`\n\n"
-        "💡 *إجمالي ساعات الدوام الفعلية: 168 ساعة.*"
-    )
-    keyboard = [
-        [InlineKeyboardButton("📥 تحميل السجل كملف Excel (XLSX)", callback_data="export_excel")],
-        [InlineKeyboardButton("⬅️ رجوع", callback_data="back_to_attendance")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(table_text, reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text("⏱️ يرجى اختيار الشهر المراد عرض سجل البصمات له:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # =====================================================================
-# 7. قسم الشكاوى والاعتراضات (Complaints System)
+# 9. دالة محرك الاستجابة الذكية لنقرات الأزرار (Callback Query Handler)
+# =====================================================================
+async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    await query.answer()  # لإزالة علامة التحميل (الساعة الرملية) فوراً عند النقر
+
+    # أزرار قسم جدول الدوام
+    if data == "sched_next_week":
+        await query.edit_message_text("📅 **جدول الأسبوع القادم:**\nنفس الوردية المعتمدة دون أي تغييرات طارئة حتى الآن.", parse_mode="Markdown")
+    elif data == "sched_filter_month":
+        await query.edit_message_text("🔍 خاصية التصفية الشهرية المتقدمة قيد التحديث والربط مع قاعدة البيانات.")
+    
+    # أزرار اختيار أشهر سجل البصمات
+    elif data.startswith("att_"):
+        month_name = "مايو 2026" if "may" in data else "أبريل 2026"
+        table_text = (
+            f"⏱️ **سجل بصمات شهر: {month_name}**\n\n"
+            "`التاريخ   | الحضور   | الانصراف | الحالة`\n"
+            "`---------------------------------------`\n"
+            "`24-05-26 | 07:55 ص  | 04:05 م  | ✅ منتظم`\n"
+            "`25-05-26 | 08:15 ص  | 04:00 م  | ⚠️ تأخير`\n"
+        )
+        keyboard = [
+            [InlineKeyboardButton("📥 تحميل السجل كملف Excel (XLSX)", callback_data="export_excel")],
+            [InlineKeyboardButton("⬅️ رجوع", callback_data="back_to_attendance")]
+        ]
+        await query.edit_message_text(table_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    
+    # أزرار البصمات الداخلية
+    elif data == "export_excel":
+        await query.message.reply_text("📥 جاري تجهيز تقرير Excel بصيغة XLSX وإرساله لك خلال لحظات...")
+    elif data == "back_to_attendance":
+        keyboard = [
+            [InlineKeyboardButton("مايو 2026", callback_data="att_may_2026")],
+            [InlineKeyboardButton("أبريل 2026", callback_data="att_apr_2026")]
+        ]
+        await query.edit_message_text("⏱️ يرجى اختيار الشهر المراد عرض سجل البصمات له:", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    # أزرار تأكيد وإلغاء محادثة الشكاوى
+    elif data == "confirm_send_complaint":
+        await query.edit_message_text("🚀 **تم إرسال شكواك بنجاح وأمان إلى إدارة الموارد البشرية.**")
+    elif data == "cancel_complaint":
+        await query.edit_message_text("❌ تم إلغاء الشكوى وعودتك للقائمة الرئيسية.")
+
+# =====================================================================
+# 10. نظام محادثة الشكاوى والاعتراضات الإدارية (Conversation)
 # =====================================================================
 async def start_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    current_date = datetime.datetime.now()
-    deadline_day = 26  
-    if current_date.day > deadline_day:
-        await update.message.reply_text(
-            f"❌ **عذراً، استقبال الشكاوى مغلق حالياً.**\n"
-            f"لقد انتهت المدة المحددة اعتراضات الرواتب لهذا الشهر (انتهت يوم {deadline_day} في الشهر).\n"
-            f"يرجى مراجعة إدارة الموارد البشرية مباشرة.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
-    await update.message.reply_text(
-        "✍️ **قسم الشكاوى والاعتراضات الإدارية**\n\n"
-        "الموعد متاح حالياً. يرجى اتباع الآتي:\n"
-        "1. اكتب نص الشكوى أو الاعتراض بالتفصيل في الرسالة القادمة.\n"
-        "2. لإلغاء العملية في أي وقت اكتب /cancel.\n\n"
-        "👇 تفضل بكتابة شكواك الآن:"
-    )
+    await update.message.reply_text("✍️ تفضل بكتابة نص شكواك أو اعتراضك الإداري الآن:")
     return AWAITING_COMPLAINT_TEXT
 
 async def receive_complaint_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['complaint_text'] = update.message.text
     keyboard = [[InlineKeyboardButton("⏭️ إرسال بدون مرفقات", callback_data="skip_file")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "✅ تم استلام النص.\n"
-        "قم بإرفاق ملف توضيحي الآن (صورة أو مستند PDF)، أو اضغط على الزر أدناه للمتابعة بدون مرفقات:",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("✅ تم الحفظ. أرفق مستند/صورة أو اضغط الزر للتخطي:", reply_markup=InlineKeyboardMarkup(keyboard))
     return AWAITING_COMPLAINT_FILE
 
 async def receive_complaint_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.document:
-        context.user_data['complaint_file'] = update.message.document.file_id
-    elif update.message.photo:
-        context.user_data['complaint_file'] = update.message.photo[-1].file_id
+    context.user_data['complaint_file'] = update.message.document.file_id if update.message.document else update.message.photo[-1].file_id
     await send_complaint_preview(update, context)
     return ConversationHandler.END
 
 async def skip_complaint_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    await update.callback_query.answer()
     context.user_data['complaint_file'] = None
-    await send_complaint_preview(query, context, is_callback=True)
+    await send_complaint_preview(update.callback_query, context, is_callback=True)
     return ConversationHandler.END
 
 async def send_complaint_preview(target, context, is_callback=False):
-    text = (
-        "🔍 **معاينة شكواك قبل الاعتماد والإرسال للإدارة:**\n\n"
-        f"📝 **النص:** {context.user_data['complaint_text']}\n"
-        f"📎 **المرفقات:** {'موجود 📄' if context.user_data.get('complaint_file') else 'لا يوجد'}\n\n"
-        "هل تريد إرسالها رسمياً؟"
-    )
-    keyboard = [
-        [InlineKeyboardButton("✅ تأكيد وإرسال", callback_data="confirm_send_complaint")],
-        [InlineKeyboardButton("❌ إلغاء وتراجع", callback_data="cancel_complaint")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if is_callback:
-        await target.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await target.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    text = f"🔍 **معاينة الشكوى التوضيحية:**\n\n📝 {context.user_data['complaint_text']}\n\nهل تؤكد الإرسال الإداري؟"
+    keyboard = [[InlineKeyboardButton("✅ تأكيد وإرسال", callback_data="confirm_send_complaint")], [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_complaint")]]
+    if is_callback: await target.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else: await target.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📥 تم إلغاء تقديم الشكوى وعودتك للقائمة الرئيسية.")
+    await update.message.reply_text("📥 تم إلغاء عملية تقديم الشكوى بنجاح.")
     return ConversationHandler.END
 
 # =====================================================================
-# 8. معالجة عمليات التأكيد النهائية (Callbacks)
-# =====================================================================
-async def handle_global_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "confirm_send_complaint":
-        await query.edit_message_text("🚀 **تم إرسال شكواك بنجاح وأمان إلى إدارة الموارد البشرية وجاري مراجعتها.**")
-    elif query.data == "cancel_complaint":
-        await query.edit_message_text("❌ تم إلغاء الشكوى ولم يتم إرسال أي بيانات.")
-
-# =====================================================================
-# 9. الدالة الأساسية لتشغيل البوت (Main Entry)
+# 11. الدالة الأساسية لتشغيل البوت واحتضان المستمعات (Main Entry)
 # =====================================================================
 def main():
-    # 📡 تشغيل خادم الويب الوهمي بالتوازي لمنع انهيار الخدمة على Render بسبب فحص المنافذ
+    # 📡 إطلاق السيرفر الوهمي بالتوازي لمنع انهيار الـ Web Service على Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    # 🔑 التوكن الجديد المحدث والمطهر من أي تضارب قديم
+    # 🔑 التوكن الجديد المحدث بالكامل لمنع أي تضارب
     TOKEN = "8678088302:AAElsZoW6htlAjOwczX9TBKysHzit3NuRxo"
     application = Application.builder().token(TOKEN).build()
 
@@ -227,16 +235,21 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel_handler)]
     )
 
+    # إضافة الـ Handlers الأساسية للمستخدمين والمدير
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex('^🗓️ جدول الدوام$'), handle_schedule))
     application.add_handler(MessageHandler(filters.Regex('^⏱️ سجل البصمات$'), handle_attendance))
+    
+    # مستقبل أزرار لوحة تحكم المدير الرئيسية
+    application.add_handler(MessageHandler(filters.Regex('^(📊 إحصائيات الموظفين|📂 مراجعة الشكاوى|⚙️ إعدادات النظام|👤 التحويل لواجهة موظف)$'), handle_admin_buttons))
+    
     application.add_handler(complaint_handler)
-    application.add_handler(CallbackQueryHandler(process_attendance_callback, pattern="^att_"))
-    application.add_handler(CallbackQueryHandler(handle_global_callbacks, pattern="^(confirm_send|cancel_complaint)"))
+    
+    # 🎯 المستمع العام والشامل للتعامل مع كافة ضغطات الأزرار العالقة
+    application.add_handler(CallbackQueryHandler(handle_all_callbacks))
 
-    # ⚡ تشغيل السحب مع تفعيل خاصية إسقاط التحديثات القديمة فوراً لتجنب الـ Conflict تماماً
+    # ⚡ التشغيل النظيف مع إسقاط التحديثات المتراكمة لتفادي الـ Conflict
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
-
