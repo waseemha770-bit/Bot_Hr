@@ -1,3 +1,23 @@
+import sys
+import os
+import subprocess
+
+# حل مشكلة تعارض pandas و openpyxl برمجياً وتجاوز كاش السيرفر
+try:
+    import openpyxl
+    # إذا كان الإصدار المثبت قديم، يتم تحديثه إجبارياً فور تشغيل السيرفر
+    if openpyxl.__version__ < '3.1.5':
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl>=3.1.5"])
+        # إعادة تشغيل السكريبت تلقائياً لتطبيق الإصدار الجديد في نفس اللحظة
+        os.execv(sys.executable, ['python'] + sys.argv)
+except Exception as e:
+    print(f"تنبيه تحديث المكتبات: {e}")
+
+# -------------------------------------------------------------
+# هنا يبدأ كود البوت الخاص بك كما هو دون أي تغيير:
+import pandas as pd
+# بقية الـ imports والأوامر الخاصة بالبوت...
+
 import os
 import threading
 import logging
