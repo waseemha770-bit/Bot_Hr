@@ -4,6 +4,7 @@
 import sys
 import os
 import subprocess
+import threading  # مضاف لإنشاء سيرفر ويب وهمي لمنع الـ Timeout على Render
 
 try:
     import openpyxl
@@ -12,6 +13,28 @@ try:
         os.execv(sys.executable, ['python'] + sys.argv)
 except Exception as e:
     print(f"تنبيه تحديث المكتبات: {e}")
+
+# =====================================================================
+# دالة خادم الويب الوهمي لحل مشكلة الـ Port Binding والـ HEAD Requests
+# =====================================================================
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class DummyWebhookServer(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"Bot is Running Successfully!")
+
+def run_dummy_server():
+    # Render يمرر رقم المنفذ ديناميكياً عبر المتغير البيئي PORT، وإلا نستخدم 8080 تلقائياً
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), DummyWebhookServer)
+    print(f"📡 Dummy Server started on port {port} to bypass Render checks...")
+    server.serve_forever()
 
 # =====================================================================
 # 2. استدعاء المكتبات المطلوبة للواجهات الجديدة
@@ -36,13 +59,11 @@ AWAITING_COMPLAINT_TEXT, AWAITING_COMPLAINT_FILE = range(2)
 # 3. دالة بدء التشغيل وعرض القائمة الرئيسية (Main Menu)
 # =====================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض القائمة الرئيسية للموظف المعتمد"""
     keyboard = [
         ['🗓️ جدول الدوام', '⏱️ سجل البصمات'],
         ['✍️ تقديم شكوى', '👤 ملفي الشخصي']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    
     await update.message.reply_text(
         "👋 أهلاً بك في لوحة تحكم الموظف الذكية.\n"
         "الرجاء اختيار الخدمة المطلوبة من القائمة أدناه:",
@@ -53,7 +74,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 4. قسم جدول الدوام (Shift Schedule)
 # =====================================================================
 async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض واجهة جدول الدوام مع فلاتر التصفية"""
     text = (
         "👤 **الموظف:** وسيم حمدان\n"
         "🆔 **الرقم الوظيفي:** HR-2245\n"
@@ -64,20 +84,17 @@ async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• الخميس: 08:00 ص - 04:00 م (صباحي)\n"
         "• الجمعة - السبت: إجازة أسبوعية."
     )
-    
     keyboard = [
         [InlineKeyboardButton("📅 الأسبوع القادم", callback_data="sched_next_week")],
         [InlineKeyboardButton("🔍 تصفية بحسب الشهر", callback_data="sched_filter_month")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 # =====================================================================
 # 5. قسم سجل البصمات (Attendance Logs)
 # =====================================================================
 async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """طلب اختيار الشهر لعرض البصمات"""
     keyboard = [
         [InlineKeyboardButton("مايو 2026", callback_data="att_may_2026")],
         [InlineKeyboardButton("أبريل 2026", callback_data="att_apr_2026")]
@@ -86,10 +103,8 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏱️ يرجى اختيار الشهر المراد عرض سجل البصمات له:", reply_markup=reply_markup)
 
 async def process_attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض جدول البصمات بنظام منسق مونو-سبيس"""
     query = update.callback_query
     await query.answer()
-    
     table_text = (
         "⏱️ **سجل بصمات شهر: مايو 2026**\n\n"
         "`التاريخ   | الحضور   | الانصراف | الحالة`\n"
@@ -98,29 +113,25 @@ async def process_attendance_callback(update: Update, context: ContextTypes.DEFA
         "`25-05-26 | 08:15 ص  | 04:00 م  | ⚠️ تأخير`\n"
         "`26-05-26 | 03:50 م  | 12:02 م  | ✅ منتظم`\n"
         "`27-05-26 | --:--    | --:--    | ❌ غياب`\n\n"
-        "💡 *إجمالي ساعات الدوام الفعلية: 168 ساعت.*"
+        "💡 *إجمالي ساعات الدوام الفعلية: 168 ساعة.*"
     )
-    
     keyboard = [
         [InlineKeyboardButton("📥 تحميل السجل كملف Excel (XLSX)", callback_data="export_excel")],
         [InlineKeyboardButton("⬅️ رجوع", callback_data="back_to_attendance")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await query.edit_message_text(table_text, reply_markup=reply_markup, parse_mode="Markdown")
 
 # =====================================================================
 # 6. قسم الشكاوى والاعتراضات (Complaints System)
 # =====================================================================
 async def start_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """التحقق من التاريخ التلقائي وقبول الشكوى"""
     current_date = datetime.datetime.now()
-    deadline_day = 26  # آخر موعد لاستقبال الشكاوى قبل الرواتب بـ 5 أيام
-    
+    deadline_day = 26  
     if current_date.day > deadline_day:
         await update.message.reply_text(
             f"❌ **عذراً، استقبال الشكاوى مغلق حالياً.**\n"
-            f"لقد انتهت المدة المحددة لاستقبال اعتراضات الرواتب لهذا الشهر (انتهت يوم {deadline_day} في الشهر).\n"
+            f"لقد انتهت المدة المحددة اعتراضات الرواتب لهذا الشهر (انتهت يوم {deadline_day} في الشهر).\n"
             f"يرجى مراجعة إدارة الموارد البشرية مباشرة.",
             parse_mode="Markdown"
         )
@@ -139,7 +150,6 @@ async def receive_complaint_text(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['complaint_text'] = update.message.text
     keyboard = [[InlineKeyboardButton("⏭️ إرسال بدون مرفقات", callback_data="skip_file")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
         "✅ تم استلام النص.\n"
         "قم بإرفاق ملف توضيحي الآن (صورة أو مستند PDF)، أو اضغط على الزر أدناه للمتابعة بدون مرفقات:",
@@ -152,7 +162,6 @@ async def receive_complaint_file(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['complaint_file'] = update.message.document.file_id
     elif update.message.photo:
         context.user_data['complaint_file'] = update.message.photo[-1].file_id
-
     await send_complaint_preview(update, context)
     return ConversationHandler.END
 
@@ -175,7 +184,6 @@ async def send_complaint_preview(target, context, is_callback=False):
         [InlineKeyboardButton("❌ إلغاء وتراجع", callback_data="cancel_complaint")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     if is_callback:
         await target.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
@@ -191,7 +199,6 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_global_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     if query.data == "confirm_send_complaint":
         await query.edit_message_text("🚀 **تم إرسال شكواك بنجاح وأمان إلى إدارة الموارد البشرية وجاري مراجعتها.**")
     elif query.data == "cancel_complaint":
@@ -201,12 +208,12 @@ async def handle_global_callbacks(update: Update, context: ContextTypes.DEFAULT_
 # 8. الدالة الأساسية لتشغيل البوت (Main Entry)
 # =====================================================================
 def main():
-    # التوكن الجديد المحدث
+    # إطلاق خادم الويب الوهمي في خيط اتصال منفصل لمنع انهيار الـ Web Service على Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     TOKEN = "8678088302:AAEGCNo6XTRuhf5ybIdbGJw8u4XMzJMOnFI"
-    
     application = Application.builder().token(TOKEN).build()
 
-    # إعداد نظام محادثة الشكاوى المتسلسل
     complaint_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^✍️ تقديم شكوى$'), start_complaint)],
         states={
@@ -219,17 +226,13 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel_handler)]
     )
 
-    # تسجيل الموزعين والأزرار الأساسية
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex('^🗓️ جدول الدوام$'), handle_schedule))
     application.add_handler(MessageHandler(filters.Regex('^⏱️ سجل البصمات$'), handle_attendance))
     application.add_handler(complaint_handler)
-    
-    # تسجيل أزرار الأحداث الشفافة
     application.add_handler(CallbackQueryHandler(process_attendance_callback, pattern="^att_"))
     application.add_handler(CallbackQueryHandler(handle_global_callbacks, pattern="^(confirm_send|cancel_complaint)"))
 
-    # تشغيل سحب البيانات (Polling)
     application.run_polling()
 
 if __name__ == '__main__':
