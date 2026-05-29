@@ -1,5 +1,5 @@
 # =====================================================================
-# 1. الجزء الذكي لتحديث المكتبات إجبارياً وتجاوز كاش السيرفر (لا تلمسه)
+# 1. الجزء الذكي لتحديث المكتبات إجبارياً وتجاوز كاش السيرفر
 # =====================================================================
 import sys
 import os
@@ -98,7 +98,7 @@ async def process_attendance_callback(update: Update, context: ContextTypes.DEFA
         "`25-05-26 | 08:15 ص  | 04:00 م  | ⚠️ تأخير`\n"
         "`26-05-26 | 03:50 م  | 12:02 م  | ✅ منتظم`\n"
         "`27-05-26 | --:--    | --:--    | ❌ غياب`\n\n"
-        "💡 *إجمالي ساعات الدوام الفعلية: 168 ساعة.*"
+        "💡 *إجمالي ساعات الدوام الفعلية: 168 ساعت.*"
     )
     
     keyboard = [
@@ -201,10 +201,9 @@ async def handle_global_callbacks(update: Update, context: ContextTypes.DEFAULT_
 # 8. الدالة الأساسية لتشغيل البوت (Main Entry)
 # =====================================================================
 def main():
-    # استبدل هذا التوكن بالتوكن الخاص ببوتك الفعلي النشط حالياً في السيرفر
-    TOKEN = "8678088302:AAEnN-TmUAKoFQhaKdOfwB8JgPaskARqsuE"
+    # التوكن الجديد المحدث
+    TOKEN = "8678088302:AAEGCNo6XTRuhf5ybIdbGJw8u4XMzJMOnFI"
     
-    # بناء التطبيق وإعداد خادم الويب الصحيح المتوافق مع منفذ Render
     application = Application.builder().token(TOKEN).build()
 
     # إعداد نظام محادثة الشكاوى المتسلسل
@@ -230,8 +229,9 @@ def main():
     application.add_handler(CallbackQueryHandler(process_attendance_callback, pattern="^att_"))
     application.add_handler(CallbackQueryHandler(handle_global_callbacks, pattern="^(confirm_send|cancel_complaint)"))
 
-    # تشغيل سحب البيانات (Polling) بشكل متوافق تماماً مع السجلات السابقة
+    # تشغيل سحب البيانات (Polling)
     application.run_polling()
 
 if __name__ == '__main__':
     main()
+
