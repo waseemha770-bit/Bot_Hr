@@ -1,156 +1,75 @@
+import os
 from datetime import datetime
-from sqlalchemy import (
-    Boolean,
-    Column,
-    ForeignKey,
-    Integer,
-    JSON,
-    String,
-    DateTime,
-    func,
-    or_,
-)
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import create_engine, Column, String, Float, Integer, ForeignKey, DateTime, Text
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from cryptography.fernet import Fernet
 
-from db_backend import db_session, engine
-from helpers import get_hashed
-from settings import SUPER_HR
+DATABASE_URL = "sqlite:///hr_enterprise_database.db"
 
+# 🔒 مفتاح تشفير ثابت لبيانات الرواتب لحماية الخصوصية
+STATIC_KEY = b'uF8gK3m_Xz9-v1WpQLr4TY7N2sEb6GcHvA1jD4xO5k8='
+cipher_suite = Fernet(STATIC_KEY)
 
-class Base(DeclarativeBase):
-    pass
+Base = declarative_base()
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def encrypt_data(data: str) -> str:
+    """تشفير البيانات الحساسة مثل الرواتب قبل حفظها"""
+    return cipher_suite.encrypt(data.encode()).decode()
 
-class User(Base):
-    __tablename__ = "user_account"
+def decrypt_data(data: str) -> str:
+    """فك تشفير البيانات عند العرض"""
+    try:
+        if not data: return "0.0"
+        return cipher_suite.decrypt(data.encode()).decode()
+    except Exception:
+        return "0.0"
 
-    id = Column(Integer, primary_key=True)
-    employee_id = Column(String(30), unique=True)
-    fullname = Column(String(30))
-    role = Column(String(10))
-    temp_pwd = Column(String(10))
-    last_chat_id = Column(String(10))
-    is_active = Column(Boolean, default=True)
-    is_pwd_expired = Column(Boolean, default=False)
-
-    @classmethod
-    def get_by_user_id(cls, user_id: str, only_active: bool = True):
-        """
-        Get user record by their ID
-        :param user_id: user ID of user
-        :param only_active: whether to fetch only active user or not
-        """
-        query = db_session.query(cls).filter(cls.id == user_id)
-        if only_active:
-            query = query.filter(cls.is_active.isnot(False))
-        return query.first()
-
-    @classmethod
-    def get_by_emp_id(cls, employee_id: str, only_active: bool = True):
-        """
-        Get user record by their employee ID
-        :param employee_id: employee ID of user
-        :param only_active: whether to fetch only active user or not
-        """
-        query = db_session.query(cls).filter(cls.employee_id == employee_id)
-        if only_active:
-            query = query.filter(cls.is_active.isnot(False))
-        return query.first()
-
-    @classmethod
-    def get_by_chat_id(cls, chat_id: str, only_active: bool = True):
-        """
-        Get user record by their chat ID
-        :param chat_id: chat ID of user
-        :param only_active: whether to fetch only active user or not
-        """
-        query = db_session.query(cls).filter(cls.last_chat_id == chat_id)
-        if only_active:
-            query = query.filter(cls.is_active.isnot(False))
-        return query.first()
-
-    @classmethod
-    def is_valid_credential(cls, employee_id: str, temp_pwd: str):
-        """
-        Get user with their correct credential
-        :param employee_id: employee ID of user
-        :param temp_pwd: OTP provided to user
-        """
-        query = db_session.query(cls).filter(
-            cls.employee_id == employee_id,
-            cls.temp_pwd == get_hashed(temp_pwd),
-            cls.is_active.isnot(False),
-            cls.is_pwd_expired.isnot(True),
-        )
-        return query.first()
-
+class Employee(Base):
+    __tablename__ = "employees"
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone_number = Column(String, nullable=False, unique=True)
+    telegram_id = Column(String, nullable=True)
+    role = Column(String, default="Employee") # Owner, Admin, Employee
+    department = Column(String, default="العلاقات العامة")
+    title = Column(String, default="موظف")
+    encrypted_salary = Column(String) # حقل مشفر بالكامل
+    vacation_balance = Column(Integer, default=30)
+    performance_review = Column(String, default="ممتاز")
 
 class Attendance(Base):
     __tablename__ = "attendance"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    employee_id = Column(String, ForeignKey("employees.id"))
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    distance_from_company = Column(Float)
+    status = Column(String)
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("user_account.id"))
-    selfie = Column(JSON, unique=True)
-    selfie_time = Column(DateTime(timezone=True))
-    location = Column(JSON)
-    location_time = Column(DateTime(timezone=True))
+class VacationRequest(Base):
+    __tablename__ = "vacation_requests"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    employee_id = Column(String, ForeignKey("employees.id"))
+    vacation_type = Column(String)
+    days_count = Column(Integer)
+    status = Column(String, default="قيد الانتظار ⏳")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    @classmethod
-    def get_last_attendance_record(cls, user_id: int, timestamp: datetime):
-        """
-        Get the last attendance record of a date
-        :param user_id: user ID of user
-        :param timestamp: UTC timestamp
-        """
-        # For other databases -- not tested yet
-        # return db_session.query(cls).filter(
-        #     cls.user_id == user_id,
-        #     or_(
-        #         cls.selfie_time.date() == timestamp.date(),
-        #         cls.selfie_time.date() == timestamp.date()
-        #     )
-        # ).desc().first()
+class HR_Policy(Base):
+    __tablename__ = "hr_policies"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    keyword = Column(String, unique=True)
+    response_text = Column(Text, nullable=False)
 
-        # For sqlite
-        return (
-            db_session.query(cls)
-            .filter(
-                cls.user_id == user_id,
-                or_(
-                    func.DATE(cls.selfie_time) == str(timestamp.date()),
-                    func.DATE(cls.selfie_time) == str(timestamp.date()),
-                ),
-            )
-            .order_by(cls.id.desc())
-            .first()
-        )
+class HR_Ticket(Base):
+    __tablename__ = "hr_tickets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    employee_id = Column(String, ForeignKey("employees.id"))
+    details = Column(Text)
+    status = Column(String, default="قيد المراجعة")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    @classmethod
-    def get_attendance_records(
-        cls, start_time: datetime, end_time: datetime, user_id: str = None
-    ):
-        """
-        :param start_time:
-        :param end_time:
-        :param user_id:
-        """
-        attendance_records = db_session.query(cls).filter(
-            func.DATETIME(cls.selfie_time) >= str(start_time),
-            func.DATETIME(cls.selfie_time) < str(end_time),
-            func.DATETIME(cls.location_time) >= str(start_time),
-            func.DATETIME(cls.location_time) < str(end_time),
-        )
-        if user_id:
-            attendance_records = attendance_records.filter(cls.user_id == user_id)
-        return attendance_records.order_by(cls.user_id, cls.id).all()
+def init_db():
+    Base.metadata.create_all(bind=engine)
 
-
-# Create/Update models
-Base.metadata.create_all(engine)
-
-# Create Super HR if not exists
-if not User.get_by_emp_id(SUPER_HR["employee_id"]):
-    SUPER_HR["temp_pwd"] = get_hashed(SUPER_HR["temp_pwd"])
-    super_hr = User(**SUPER_HR)
-    db_session.add(super_hr)
-    db_session.commit()
