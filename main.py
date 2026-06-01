@@ -31,7 +31,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # 🔑 التوكن الجديد المحدث مباشرة في الكود
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "8678088302:AAH3x74ku-Lc-rKLrn2lfTmynM6sKOUnX2U")
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "BOT_TOKEN")
 
 class RenderHealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
